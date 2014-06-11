@@ -2,6 +2,8 @@
 #
 # The top level targets link in the two .o files for now.
 #
+TARGETS += may-clear
+TARGETS += may-test
 TARGETS += rgb-test
 TARGETS += udp-rx
 TARGETS += opc-rx
