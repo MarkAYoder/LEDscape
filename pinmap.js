@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 var pinData = [
 		{ header: 8, headerPin:  1,   gpioNum: 0   },    
 		{ header: 8, headerPin:  2, gpioNum: 0   },    
