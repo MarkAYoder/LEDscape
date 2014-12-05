@@ -12,9 +12,10 @@ am335x/pasm/pasm
 *~
 *~
 a.out
-fade-test
-fire
-udp-rx
-opc-rx
 .idea
 opc-server
+pru/generated
+pru/bin
+ledscape.service
+.idea
+*.iml

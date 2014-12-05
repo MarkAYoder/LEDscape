@@ -108,43 +108,37 @@ ledscape_draw(
 /** Wait for the current frame to finish transfering to the strips.
  * \returns a token indicating the response code.
  */
-uint32_t
+void
 ledscape_wait(
 	ledscape_t * const leds
 )
 {
 	while (1)
 	{
-		uint32_t response0 = leds->ws281x_0->response;
-		uint32_t response1 = leds->ws281x_1->response;
+		pru_wait_interrupt();
 
 		// printf("pru0: (%d,%d), pru1: (%d,%d)\n",
 		// 	leds->ws281x_0->command, leds->ws281x_0->response,
 		// 	leds->ws281x_1->command, leds->ws281x_1->response
 		// );
 
-		if (response0 && response1) {
-			leds->ws281x_0->response = leds->ws281x_1->response = 0;
-			// TODO: How to handle both return values?
-			return response0;
-		}
+		if (leds->ws281x_0->response && leds->ws281x_1->response) return;
 	}
 }
 
 
-ledscape_t *
-ledscape_init(
-	unsigned num_pixels
-)
-{
-	return ledscape_init_with_modes(num_pixels, WS281x, WS281x);
+ledscape_t * ledscape_init( unsigned num_pixels ) {
+	return ledscape_init_with_programs(
+		num_pixels,
+		"pru/bin/ws281x-original-ledscape-pru0.bin",
+		"pru/bin/ws281x-original-ledscape-pru1.bin"
+	);
 }
 
-ledscape_t *
-ledscape_init_with_modes(
+ledscape_t * ledscape_init_with_programs(
 	unsigned num_pixels,
-	ledscape_output_mode_t pru0_mode,
-	ledscape_output_mode_t pru1_mode
+	const char* pru0_program_filename,
+	const char* pru1_program_filename
 )
 {
 	pru_t * const pru0 = pru_init(0);
@@ -152,7 +146,7 @@ ledscape_init_with_modes(
 
 	const size_t frame_size = num_pixels * LEDSCAPE_NUM_STRIPS * 4;
 
-	if (2 *frame_size > pru0->ddr_size)
+	if (2*frame_size > pru0->ddr_size)
 		die("Pixel data needs at least 2 * %zu, only %zu in DDR\n",
 			frame_size,
 			pru0->ddr_size
@@ -165,8 +159,8 @@ ledscape_init_with_modes(
 		.pru1		= pru1,
 		.num_pixels	= num_pixels,
 		.frame_size	= frame_size,
-		.pru0_mode  = pru0_mode,
-		.pru1_mode  = pru1_mode,
+		.pru0_program_filename  = pru0_program_filename,
+		.pru1_program_filename  = pru1_program_filename,
 		.ws281x_0	= pru0->data_ram,
 		.ws281x_1	= pru1->data_ram
 	};
@@ -189,15 +183,6 @@ ledscape_init_with_modes(
 		pru_gpio(3, gpios3[i], 1, 0);
 
 	// Initiate the PRU0 program
-	const char* pru0_program_filename;
-	switch (pru0_mode) {
-		case WS281x: pru0_program_filename = "./ws281x_0.bin"; break;
-		case DMX: pru0_program_filename = "./dmx_0.bin"; break;
-		case WS2801: pru0_program_filename = "./ws2801_0.bin"; break;
-		default:
-			warn("Invalid PRU0 Mode.");
-			pru0_program_filename = "./ws281x_0.bin";
-	}
 	pru_exec(pru0, pru0_program_filename);
 
 	// Watch for a done response that indicates a proper startup
@@ -208,18 +193,6 @@ ledscape_init_with_modes(
 
 
 	// Initiate the PRU1 program
-	const char* pru1_program_filename;
-	switch (pru1_mode) {
-		case WS281x: pru1_program_filename = "./ws281x_1.bin"; break;
-		case DMX:
-			warn("PRU1 does not currently support DMX.");
-			pru1_program_filename = "./ws281x_1.bin";
-		break;
-		case WS2801: pru1_program_filename = "./ws2801_1.bin"; break;
-		default:
-			pru1_program_filename = "./ws281x_1.bin";
-			warn("Invalid PRU1 Mode.");
-	}
 	pru_exec(pru1, pru1_program_filename);
 
 	// Watch for a done response that indicates a proper startup
@@ -232,6 +205,108 @@ ledscape_init_with_modes(
 }
 
 
+extern void ledscape_set_color(
+	ledscape_frame_t * const frame,
+	color_channel_order_t color_channel_order,
+	uint8_t strip,
+	uint16_t pixel,
+	uint8_t r,
+	uint8_t g,
+	uint8_t b
+) {
+	ledscape_pixel_set_color(
+		&frame[pixel].strip[strip],
+		color_channel_order,
+		r,
+		g,
+		b
+	);
+}
+
+
+extern inline void ledscape_pixel_set_color(
+	ledscape_pixel_t * const out_pixel,
+	color_channel_order_t color_channel_order,
+	uint8_t r,
+	uint8_t g,
+	uint8_t b
+) {
+	switch (color_channel_order) {
+		case COLOR_ORDER_RGB:
+			out_pixel->a = r;
+			out_pixel->b = g;
+			out_pixel->c = b;
+		break;
+
+		case COLOR_ORDER_RBG:
+			out_pixel->a = r;
+			out_pixel->b = b;
+			out_pixel->c = g;
+		break;
+
+		case COLOR_ORDER_GRB:
+			out_pixel->a = g;
+			out_pixel->b = r;
+			out_pixel->c = b;
+		break;
+
+		case COLOR_ORDER_GBR:
+			out_pixel->a = g;
+			out_pixel->b = b;
+			out_pixel->c = r;
+		break;
+
+		case COLOR_ORDER_BGR:
+			out_pixel->a = b;
+			out_pixel->b = g;
+			out_pixel->c = r;
+		break;
+
+		case COLOR_ORDER_BRG:
+			out_pixel->a = b;
+			out_pixel->b = r;
+			out_pixel->c = g;
+		break;
+	}
+}
+
+
+const char* color_channel_order_to_string(color_channel_order_t color_channel_order) {
+	switch (color_channel_order) {
+		case COLOR_ORDER_RGB: return "RGB";
+		case COLOR_ORDER_RBG: return "RBG";
+		case COLOR_ORDER_GRB: return "GRB";
+		case COLOR_ORDER_GBR: return "GBR";
+		case COLOR_ORDER_BGR: return "BGR";
+		case COLOR_ORDER_BRG: return "BRG";
+		default: return  "<invalid color_channel_order>";
+	}
+}
+
+color_channel_order_t color_channel_order_from_string(const char* str) {
+	if (strcasecmp(str, "RGB") == 0) {
+		return COLOR_ORDER_RGB;
+	}
+	else if (strcasecmp(str, "RBG") == 0) {
+		return COLOR_ORDER_RBG;
+	}
+	else if (strcasecmp(str, "GRB") == 0) {
+		return COLOR_ORDER_GRB;
+	}
+	else if (strcasecmp(str, "GBR") == 0) {
+		return COLOR_ORDER_GBR;
+	}
+	else if (strcasecmp(str, "BGR") == 0) {
+		return COLOR_ORDER_BGR;
+	}
+	else if (strcasecmp(str, "BRG") == 0) {
+		return COLOR_ORDER_BRG;
+	}
+	else {
+		return -1;
+	}
+}
+
 void
 ledscape_close(
 	ledscape_t * const leds
@@ -242,37 +317,4 @@ ledscape_close(
 	leds->ws281x_1->command = 0xFF;
 	pru_close(leds->pru0);
 	pru_close(leds->pru1);
-}
-
-
-void
-ledscape_set_color(
-	ledscape_frame_t * const frame,
-	uint8_t strip,
-	uint16_t pixel,
-	uint8_t r,
-	uint8_t g,
-	uint8_t b
-)
-{
-	ledscape_pixel_t * const p = &frame[pixel].strip[strip];
-	p->r = r;
-	p->g = g;
-	p->b = b;
-}
-
-const char* ledscape_output_mode_to_string(ledscape_output_mode_t mode) {
-	switch (mode) {
-		case WS281x: return "WS281x";
-		case DMX: return "DMX";
-		case WS2801: return "WS2801";
-		default: return "unknown";
-	}
-}
-
-const ledscape_output_mode_t ledscape_output_mode_from_string(const char* input) {
-	if (strcmp(input, "WS281x") == 0) return WS281x;
-	else if (strcmp(input, "DMX") == 0) return DMX;
-	else if (strcmp(input, "WS2801") == 0) return WS2801;
-	else return WS281x;
 }

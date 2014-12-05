@@ -2,16 +2,15 @@
 #
 # The top level targets link in the two .o files for now.
 #
-TARGETS += rgb-test
-TARGETS += udp-rx
-TARGETS += opc-rx
 TARGETS += opc-server
 
 LEDSCAPE_OBJS = ledscape.o pru.o util.o lib/cesanta/frozen.o lib/cesanta/mongoose.o
 LEDSCAPE_LIB := libledscape.a
 
-all: $(TARGETS) dmx_0.bin ws2801_0.bin ws2801_1.bin ws281x_0.bin ws281x_1.bin
+PRU_TEMPLATES := $(wildcard pru/templates/*.p)
+EXPANDED_PRU_TEMPLATES := $(addprefix pru/generated/, $(notdir $(PRU_TEMPLATES:.p=.template)))
 
+all: $(TARGETS) all_pru_templates ledscape.service
 
 ifeq ($(shell uname -m),armv7l)
 # We are on the BeagleBone Black itself;
@@ -40,7 +39,9 @@ CFLAGS += \
 	-mtune=cortex-a8 \
 	-march=armv7-a \
 	-Wunused-parameter \
-	-DNS_ENABLE_IPV6
+	-DNS_ENABLE_IPV6 \
+	-Wunknown-pragmas \
+	-Wsign-compare
 
 LDFLAGS += \
 
@@ -48,7 +49,7 @@ LDLIBS += \
 	-lpthread \
 
 COMPILE.o = $(CROSS_COMPILE)gcc $(CFLAGS) -c -o $@ $<
-COMPILE.a = $(CROSS_COMPILE)gcc -c -o $@ $<
+COMPILE.a = $(CROSS_COMPILE)ar crv $@ $^
 COMPILE.link = $(CROSS_COMPILE)gcc $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 
@@ -73,19 +74,35 @@ LDLIBS += $(APP_LOADER_LIB) -lm
 PASM_DIR ?= ./am335x/pasm
 PASM := $(PASM_DIR)/pasm
 
+pru/generated/%.template: pru/templates/%.p pru/templates/common.p.h
+	$(eval TEMPLATE_NAME := $(basename $(notdir $@)))
+	mkdir -p pru/generated
+	pru/build_template.sh $(TEMPLATE_NAME)
+	touch $@
+	$(MAKE) `ls pru/generated | egrep '^$(TEMPLATE_NAME).*\.p$$' | sed 's/.p$$/.bin/' | sed -E 's/(.*)/pru\/generated\/\1/'`
+
+all_pru_templates: $(EXPANDED_PRU_TEMPLATES)
+
 %.bin: %.p $(PASM)
-	$(CPP) - < $< | perl -p -e 's/^#.*//; s/;/\n/g; s/BYTE\((\d+)\)/t\1/g' > $<.i
-	$(PASM) -V3 -b $<.i $(basename $@)
-	$(RM) $<.i
+	mkdir -p pru/bin
+	cd `dirname $@` && gcc -E - < $(notdir $<) | perl -p -e 's/^#.*//; s/;/\n/g; s/BYTE\((\d+)\)/t\1/g' > $(notdir $<).i
+	$(PASM) -V3 -b $<.i pru/bin/$(notdir $(basename $@))
+	#$(RM) $<.i
 
 %.o: %.c
 	$(COMPILE.o)
+
+libledscape.a: $(LEDSCAPE_OBJS)
+	$(RM) $@
+	$(COMPILE.a)
 
 $(foreach O,$(TARGETS),$(eval $O: $O.o $(LEDSCAPE_OBJS) $(APP_LOADER_LIB)))
 
 $(TARGETS):
 	$(COMPILE.link)
 
+ledscape.service: ledscape.service.in
+	sed 's%LEDSCAPE_PATH%'`pwd`'%' ledscape.service.in > ledscape.service
 
 .PHONY: clean
 
@@ -100,7 +117,12 @@ clean:
 		*.bin \
 		lib/cesanta/.*.o.d \
 		lib/cesanta/*.i \
-		lib/cesanta/*.o
+		lib/cesanta/*.o \
+		pru/generated \
+		pru/bin \
+		ledscape.service
+	cd am335x/app_loader/interface && $(MAKE) clean
+	cd am335x/pasm && $(MAKE) clean
 
 ###########
 #
